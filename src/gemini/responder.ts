@@ -95,7 +95,12 @@ export class GeminiResponder {
   private readonly maxTokens: number;
 
   constructor(opts: GeminiResponderOptions) {
-    this.client = new GoogleGenAI({ apiKey: opts.apiKey });
+    const baseUrl = process.env.GEMINI_BASE_URL;
+    this.client = new GoogleGenAI(
+      baseUrl
+        ? { apiKey: opts.apiKey, httpOptions: { baseUrl } }
+        : { apiKey: opts.apiKey },
+    );
     this.model = opts.model;
     this.persona = opts.persona;
     this.maxTokens = opts.maxTokens ?? 1024;
