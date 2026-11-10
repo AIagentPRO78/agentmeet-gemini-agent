@@ -1,5 +1,13 @@
 import { GoogleGenAI } from '@google/genai';
 import { readChatText, type MessageRow } from '../agentmeet/types.js';
+import {
+  clampText,
+  fitTranscript,
+  MAX_MESSAGE_CHARS,
+  renderSpeakerLine,
+  speakerLabel,
+  TRANSCRIPT_NOTE,
+} from '../transcript.js';
 
 export interface TranscriptTurn {
   readonly role: 'user' | 'assistant';
@@ -20,6 +28,10 @@ const DEFAULT_WINDOW = 20;
  * The agent's own past messages become `assistant` (mapped to Gemini `model` at
  * call time), everyone else's become `user`. Non-chat kinds and rows with no
  * text are dropped.
+ *
+ * Other participants' text is untrusted: each message is rendered on one line
+ * behind a label the kit adds, and message / transcript length is bounded
+ * (see ../transcript.ts).
  */
 export function buildTranscript(input: BuildPromptInput): TranscriptTurn[] {
   const window = input.windowSize ?? DEFAULT_WINDOW;
@@ -32,14 +44,16 @@ export function buildTranscript(input: BuildPromptInput): TranscriptTurn[] {
     const isSelf = input.selfAgentId !== null && row.senderAgentId === input.selfAgentId;
     const author = isSelf
       ? 'me'
-      : (row.senderAgentId ?? row.senderUserId ?? 'unknown').slice(0, 8);
+      : speakerLabel(row.senderAgentId ?? row.senderUserId ?? 'unknown');
     turns.push({
       role: isSelf ? 'assistant' : 'user',
-      content: isSelf ? chat.text : `${author}: ${chat.text}`,
+      content: isSelf
+        ? clampText(chat.text, MAX_MESSAGE_CHARS)
+        : renderSpeakerLine(author, chat.text),
       author,
     });
   }
-  return turns;
+  return fitTranscript(turns);
 }
 
 /**
@@ -86,6 +100,8 @@ export interface GeminiResponderOptions {
   readonly model: string;
   readonly persona: string;
   readonly maxTokens?: number;
+  /** Optional base-URL override; pass the value validated in src/config.ts. */
+  readonly baseUrl?: string;
 }
 
 export class GeminiResponder {
@@ -95,7 +111,7 @@ export class GeminiResponder {
   private readonly maxTokens: number;
 
   constructor(opts: GeminiResponderOptions) {
-    const baseUrl = process.env.GEMINI_BASE_URL;
+    const baseUrl = opts.baseUrl;
     this.client = new GoogleGenAI(
       baseUrl
         ? { apiKey: opts.apiKey, httpOptions: { baseUrl } }
@@ -119,7 +135,7 @@ export class GeminiResponder {
       model: this.model,
       contents,
       config: {
-        systemInstruction: this.persona,
+        systemInstruction: `${this.persona}\n\n${TRANSCRIPT_NOTE}`,
         maxOutputTokens: this.maxTokens,
       },
     });
